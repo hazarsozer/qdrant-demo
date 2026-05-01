@@ -1,38 +1,20 @@
-import hashlib
-import math
 import os
 
+from sentence_transformers import SentenceTransformer
 from qdrant_client import QdrantClient
 from qdrant_client.http import models
 
 COLLECTION_NAME = "tech_books"
-VECTOR_SIZE = 8
+VECTOR_SIZE = 384
 QDRANT_HOST = os.getenv("QDRANT_HOST", "localhost")
 QDRANT_PORT = int(os.getenv("QDRANT_PORT", "6333"))
 
-
-def tokenize(text: str) -> list[str]:
-    cleaned = text.lower().replace("-", " ")
-    return [token for token in cleaned.split() if token]
+print("Loading embedding model...")
+_model = SentenceTransformer("all-MiniLM-L6-v2")
 
 
 def embed_text(text: str) -> list[float]:
-    # Lightweight deterministic embedding for a classroom demo.
-    # It simulates turning text into vectors without external model downloads.
-    vector = [0.0] * VECTOR_SIZE
-
-    for token in tokenize(text):
-        digest = hashlib.sha256(token.encode("utf-8")).digest()
-        bucket = digest[0] % VECTOR_SIZE
-        sign = 1.0 if digest[1] % 2 == 0 else -1.0
-        weight = 1.0 + (digest[2] / 255.0)
-        vector[bucket] += sign * weight
-
-    norm = math.sqrt(sum(value * value for value in vector))
-    if norm == 0:
-        return vector
-
-    return [value / norm for value in vector]
+    return _model.encode(text).tolist()
 
 
 def build_client() -> QdrantClient:
@@ -99,28 +81,20 @@ def upsert_data(client: QdrantClient) -> None:
     print(f"Successfully upserted {len(points)} points.")
 
 
-def search_with_filter(client: QdrantClient, query_text: str) -> None:
-    print(f"\nSearching for: '{query_text}' with category filter 'coding'...")
+def search(client: QdrantClient, query_text: str) -> None:
+    print(f"\nSearching for: '{query_text}'...")
 
     response = client.query_points(
         collection_name=COLLECTION_NAME,
         query=embed_text(query_text),
-        query_filter=models.Filter(
-            must=[
-                models.FieldCondition(
-                    key="category",
-                    match=models.MatchValue(value="coding"),
-                )
-            ]
-        ),
-        limit=2,
+        limit=4,
     )
 
-    print("Search Results:")
+    print("Results:")
     for result in response.points:
         print(
             f" - [Score: {result.score:.4f}] "
-            f"{result.payload['title']} (Year: {result.payload['year']})"
+            f"{result.payload['title']} [{result.payload['category']}] ({result.payload['year']})"
         )
 
 
@@ -128,7 +102,16 @@ def main() -> None:
     client = build_client()
     setup_collection(client)
     upsert_data(client)
-    search_with_filter(client, "programming and software development")
+
+    print("\nQdrant ready. Type a query to search (Ctrl+C to stop).")
+    while True:
+        try:
+            query = input("\nQuery: ").strip()
+            if query:
+                search(client, query)
+        except KeyboardInterrupt:
+            print("\nDone.")
+            break
 
 
 if __name__ == "__main__":
